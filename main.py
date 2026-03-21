@@ -1,5 +1,4 @@
-# enough_sms_bomber_2026_fixed.py
-# Syntax hatası giderildi, her f-string güvenli şekilde yazıldı
+# enough_sms_bomber_2026_fixed_no_parse_error.py
 
 import asyncio
 import logging
@@ -53,10 +52,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Parantez kaçırıldı → \( \) şeklinde
     text = (
         "📱 *Numarayı gir*\n"
         "Örnek: 5391234567 veya 905391234567\n"
-        "(0'lı da yazsan +90 yaparım)"
+        "\\(0'lı da yazsan otomatik +90 yaparım\\)"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
     context.user_data["state"] = "bekle_numara"
@@ -74,7 +74,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tel = "90" + tel
 
         if len(tel) != 12 or not tel.startswith("90"):
-            await update.message.reply_text("❌ Numara hatalı. Tekrar gir.", parse_mode=ParseMode.MARKDOWN_V2)
+            await update.message.reply_text("❌ Numara hatalı\. Tekrar gir\.", parse_mode=ParseMode.MARKDOWN_V2)
             return
 
         context.user_data["tel"] = tel
@@ -82,7 +82,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         text = (
             f"✅ Numara alındı: `{tel}`\n\n"
-            f"🔥 Kaç adet SMS? (max {MAX_ADET})"
+            f"🔥 Kaç adet SMS? \\(max {MAX_ADET}\\)"
         )
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
@@ -90,10 +90,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             adet = int(msg)
             if adet < 1 or adet > MAX_ADET:
-                await update.message.reply_text(f"1-{MAX_ADET} arası sayı gir.", parse_mode=ParseMode.MARKDOWN_V2)
+                await update.message.reply_text(f"1-{MAX_ADET} arası sayı gir\.", parse_mode=ParseMode.MARKDOWN_V2)
                 return
         except ValueError:
-            await update.message.reply_text("Sayı gir amk.", parse_mode=ParseMode.MARKDOWN_V2)
+            await update.message.reply_text("Sayı gir amk\.", parse_mode=ParseMode.MARKDOWN_V2)
             return
 
         context.user_data["adet"] = adet
@@ -112,7 +112,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if basarili:
             cevap = (
-                f"✅ *Gönderildi!*\n"
+                f"✅ *Gönderildi\!*\n"
                 f"Servis → `{servis}`\n"
                 f"Numara → `{tel}`\n"
                 f"Adet → `{adet}`\n"
@@ -123,8 +123,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ *Hiçbir servis tutmadı*\n"
                 f"Numara → `{tel}`\n"
                 f"Adet → `{adet}`\n"
-                f"Servisler banlanmış veya kapalı.\n"
-                f"GitHub'da yeni fork bulup endpoint ekle."
+                f"Servisler banlanmış veya kapalı\.\n"
+                f"GitHub'da yeni fork bulup endpoint ekle\."
             )
 
         await update.message.reply_text(cevap, parse_mode=ParseMode.MARKDOWN_V2)
@@ -165,7 +165,7 @@ def main():
     app.add_handler(CommandHandler("sms", sms))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    print("Enough SMS Bomber 2026 syntax temiz başladı")
+    print("Enough SMS Bomber 2026 syntax + MarkdownV2 temiz başladı")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
