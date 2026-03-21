@@ -16,7 +16,7 @@ from telegram.ext import (
 
 # ────────────────────────────────────────────────
 # KONFIGÜRASYON
-TOKEN = os.getenv("8712193355:AAE8TAr0hAoGDo9HiABpVG6zp-x9eBbvfns") or "BURAYA_TOKEN_KOY"  # Railway variable kullan, hardcoded bırakma
+TOKEN = os.getenv("8712193355:AAE8TAr0hAoGDo9HiABpVG6zp-x9eBbvfns") or "8712193355:AAE8TAr0hAoGDo9HiABpVG6zp-x9eBbvfns"  # Railway variable kullan, hardcoded bırakma
 
 # Çalışan / test edilmiş alternatif API'ler (2025-2026 durumu)
 API_SERVICES = [
