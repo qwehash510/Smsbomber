@@ -1,117 +1,289 @@
-# main.py - Hatasız deploy için optimize edilmiş versiyon (21 Mart 2026)
-
-import asyncio
-import logging
 import os
+import tempfile
+import json
 import random
-from datetime import datetime
-
-import httpx
-from dotenv import load_dotenv
+from datetime import datetime, timedelta
 from telegram import Update
-from telegram.constants import ParseMode
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import asyncio
+import concurrent.futures
 
-# Logging - Railway logları temiz görünsün
-logging.basicConfig(
-    format='%(asctime)s | %(levelname)s | %(message)s',
-    level=logging.INFO,
-    datefmt='%H:%M:%S'
-)
-logger = logging.getLogger(__name__)
+# Bot token'ınızı buraya ekleyin
+TELEGRAM_BOT_TOKEN = 'Bot Tokenimizi Giriyoruz'
 
-load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN ortam değişkeni eksik! Railway Variables'a ekle.")
-
-# Enough-Reborn fork'larından + 2026 başı kısmen yaşayan Türkiye servisleri
-SERVICES = [
-    {"name": "kandilli-mirror", "url": "https://api.kandilli.info/sms", "method": "GET", "params": {"phone": "{phone}", "amount": "{count}"}},
-    {"name": "sms24-vercel",    "url": "https://sms24api.vercel.app/send", "method": "GET", "params": {"to": "{phone}", "count": "{count}"}},
-    {"name": "temp-number-org", "url": "https://temp-number.org/api/sms", "method": "GET", "params": {"number": "{phone}", "amount": "{count}"}},
-    {"name": "otp-xn--sms",     "url": "https://otp.xn--sms-0ra.net/send", "method": "GET", "params": {"phone": "{phone}"}},
+# Komik mesajlar listesi
+FUNNY_MESSAGES = [
+    "🕺 Logları bulduk, şimdi dans etme zamanı! Dans, dans! 💃",
+    "☕ Loglar hazır, kahve molası mı veriyoruz? Afiyet olsun! 🍵",
+    "🕵️‍♀️ Aradığın log mu? İşte tam karşında, gizli hiçbir şey kalmadı! 🔍",
+    "😎 Suçüstü yakalandın! Loglar ele geçirildi bile! 🚨",
+    "🏆 Log avcısı günün kahramanı! Bravo sana! 🌟",
+    "🌈 VIP Log Hizmeti: Senin için özel olarak hazırlandı! 💎",
+    "🕶️ Gizli loglar artık açığa çıktı. Sır kalmadı! 🔓",
+    "🎉 Log bulma operasyonu başarılı. Kutlama zamanı! 🎊",
+    "🕯️ Loglar senin için özenle depolandı. Dedektiflik mezunu gibisin! 🏅",
+    "🍽️ Log ziyafeti hazır! Afiyet olsun, log avcısı! 🍴"
 ]
 
-MAX_COUNT = 60              # çok yüksek girilirse ban riski artar
-REQUEST_TIMEOUT = 12.0
-DELAY_BETWEEN = (1.2, 4.0)
+# Log bulunamazsa kullanılacak teselli mesajları
+NO_LOG_MESSAGES = [
+    "🕵️‍♀️ *Şimdilik bulamadık ama merak etme!* \n"
+    "🌐 Devasa veritabanımız sürekli güncelleniyor. Birazdan her şey netleşecek! 🔄",
+    
+    "🔍 *Log avcısı boş durmuyor!* \n"
+    "💾 Güncel veritabanımız şu anda yeni veriler için taranıyor. Az sonra bulacağız! 🚀",
+    
+    "🌈 *Üzülme, her şey yolunda!* \n"
+    "🔐 Gizli arşivlerimiz sürekli genişliyor. Bugün olmazsa yarın mutlaka bulacağız! 📊",
+    
+    "🕰️ *Zamana bırak!* \n"
+    "🌍 Global log ağımız kesintisiz olarak veri topluyor. Şimdilik görünmez ama yakında her şey netleşecek! 🌐",
+    
+    "🤖 *Yapay zeka destekli log arama sistemimiz çalışıyor!* \n"
+    "🔬 Detaylı tarama ve sürekli güncelleme modundayız. Az kaldı! 💡",
+    
+    "🔒 *Gizli bilgi deposu hazırlanıyor!* \n"
+    "📡 Veritabanımız sürekli besleniyor, güncellemeler devam ediyor. Sabret! 🌟",
+    
+    "💡 *Henüz değil ama çok yakında!* \n"
+    "🌐 Dünya çapındaki log ağımız her saniye genişliyor. İnan ki bulacağız! 🕵️‍♀️",
+    
+    "🚦 *Şu an için yeşil ışık yanmadı ama...* \n"
+    "🔄 Dinamik veritabanımız sürekli güncelleme halinde. Umudunu kaybetme! 📈",
+    
+    "🌠 *Her bulunamayan log, yeni bir fırsattır!* \n"
+    "🔍 Geniş arşivlerimiz her geçen saniye büyüyor. Bekle ve gör! 🌐",
+    
+    "🛡️ *Gizlilik ve güncellik bizim işimiz!* \n"
+    "💽 Veritabanımız sürekli genişliyor, yeni bilgiler geliyor. Henüz değil ama çok yakında! 🚀"
+]
 
-def md_escape(s: str) -> str:
-    """MarkdownV2'de patlamaması için rezerv karakterleri kaçır"""
-    for c in r'_*[]()~`>#+-=|{}.!':
-        s = s.replace(c, f'\\{c}')
-    return s
+# Premium kullanıcıların ID'leri ve abonelik bitiş tarihleri
+premium_users = {}  # {user_id: expiration_date}
 
+# Gösterilen logları takip etmek için bir sözlük
+shown_logs = {}
+
+# Kullanıcı sorgulama haklarını takip eden sözlük
+user_search_limits = {}  # {user_id: remaining_attempts}
+
+# Kullanıcılara verilen maksimum sorgulama hakkı
+MAX_SEARCH_ATTEMPTS = 3
+
+# Premium kullanıcıları kontrol eden işlev
+def check_premium_users():
+    current_time = datetime.now()
+    expired_users = [user_id for user_id, expiry in premium_users.items() if current_time > expiry]
+    for user_id in expired_users:
+        del premium_users[user_id]
+
+# Belirli bir anahtar kelimeye göre txt dosyalarını tarayan işlev
+async def find_logs(keyword):
+    logs = []
+    try:
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            tasks = [
+                loop.run_in_executor(executor, search_in_file, filename, keyword)
+                for filename in os.listdir('.')
+                if filename.endswith('.txt')
+            ]
+            results = await asyncio.gather(*tasks)
+            for result in results:
+                logs.extend(result)
+    except Exception as e:
+        print(f"find_logs sırasında hata: {str(e)}")
+    return logs
+
+def search_in_file(filename, keyword):
+    logs = []
+    try:
+        with open(filename, 'r', encoding='utf-8') as file:
+            for line in file:
+                if keyword in line:
+                    logs.append(line.strip())
+    except UnicodeDecodeError:
+        try:
+            with open(filename, 'r', encoding='latin-1') as file:
+                for line in file:
+                    if keyword in line:
+                        logs.append(line.strip())
+        except Exception as e:
+            print(f"{filename} dosyası okunurken hata oluştu: {str(e)}")
+            return []
+
+    return logs
+
+# /start komutunu işleyen işlev
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = md_escape(
-        "💣 Enough tarzı SMS Bomber\n\n"
-        "Komut: /sms\n"
-        "Sonra numarayı yaz → sonra adedi yaz\n"
-        "⚠ Test amaçlıdır. Yasal sorumluluk sende."
+    check_premium_users()
+    user_id = update.message.from_user.id
+    
+    # Kullanıcının premium olup olmadığını kontrol et
+    if user_id not in premium_users:
+        # Kullanıcının daha önce başlatılıp başlatılmadığını kontrol edin
+        if user_id not in user_search_limits:
+            user_search_limits[user_id] = MAX_SEARCH_ATTEMPTS
+
+        # Kullanıcının sorgulama haklarını kontrol edin
+        if user_search_limits[user_id] <= 0:
+            await update.message.reply_text(
+                "🚫 *Üzgünüz!* Sorgulama hakkınız tükendi. \n\n"
+                "💡 Yeni bir paket satın almak için @Bytncpx ile iletişime geçin. \n"
+                "📞 Destek hattımız her zaman sizin için hazır! 🌟"
+            )
+            return
+    
+    welcome_message = (
+        "🤖 *Log Tarama Botuna Hoş Geldiniz!* 🔍\n\n"
+        "📜 Ben, gizli logları bulma konusunda uzmanlaşmış bir botum.\n"
+        "✨ Belirli bir anahtar kelimeyi kullanarak log dosyalarını tarayabilirim.\n\n"
+        "🎯 *Nasıl Kullanılır?*\n"
+        "• Komut: `/log [anahtar kelime]`\n"
+        "• *Örnek:* `/log netflix`\n\n"
+        "🚀 Hemen aramaya başlayın ve logların sırlarını keşfedin! 🕵️‍♀️"
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+    await update.message.reply_text(welcome_message, parse_mode='Markdown')
 
+# /log komutunu işleyen işlev
+async def log(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    check_premium_users()
+    user_id = update.message.from_user.id
+    
+    # Kullanıcının premium olup olmadığını kontrol edin
+    if user_id not in premium_users:
+        if user_id not in user_search_limits:
+            user_search_limits[user_id] = MAX_SEARCH_ATTEMPTS
+        
+        # Sorgulama hakkı kalmadıysa engelle
+        if user_search_limits[user_id] <= 0:
+            await update.message.reply_text(
+                "🚫 *Sorgulama Hakkı Tükendi!* 🔒\n\n"
+                "💡 Yeni bir paket satın almak için @Bytncpx ile iletişime geçin.\n"
+                "📞 Destek ekibimiz yardımcı olmaya hazır! 🌈"
+            )
+            return
 
-async def sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = md_escape(
-        "📞 Numarayı yaz\n"
-        "Örnek: 5391234567 veya 905391234567\n"
-        "\\(0 ile başlasan da otomatik +90 olur\\)"
-    )
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
-    context.user_data["state"] = "phone"
-
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    state = context.user_data.get("state")
-    if not state:
+        # Kullanıcının sorgulama hakkını azalt
+        user_search_limits[user_id] -= 1
+    
+    if len(context.args) != 1:
+        await update.message.reply_text(
+            "❗ *Eksik Parametre!* \n\n"
+            "🔍 Lütfen bir *anahtar kelime* belirtin. \n"
+            "📝 *Örnek:* `/log udemy`"
+        )
         return
 
-    text = update.message.text.strip()
+    keyword = context.args[0]
+    chat_id = update.message.chat_id
 
-    if state == "phone":
-        phone = "".join(c for c in text if c.isdigit())
-        if phone.startswith("0"):
-            phone = "90" + phone[1:]
-        elif len(phone) == 10:
-            phone = "90" + phone
+    # Kullanıcıya işlemin başladığını belirten mesaj
+    processing_message = await update.message.reply_text(
+        f"🔬 *{keyword}* için loglar taranıyor... \n"
+        "⏳ Lütfen sabırla bekleyin. Gizli bilgiler çıkarılıyor! 🕵️‍♀️"
+    )
 
-        if len(phone) != 12 or not phone.startswith("90"):
-            await update.message.reply_text(md_escape("❌ Numara hatalı. Tekrar yaz."), parse_mode=ParseMode.MARKDOWN_V2)
-            return
+    try:
+        # İşlem süresini belirlemek için zaman hesaplama
+        start_time = datetime.now()
+        end_time = start_time + timedelta(seconds=30)  # Örneğin, 30 saniye işlem süresi
 
-        context.user_data["phone"] = phone
-        context.user_data["state"] = "count"
+        while datetime.now() < end_time:
+            remaining_time = end_time - datetime.now()
+            minutes, seconds = divmod(remaining_time.seconds, 60)
+            await processing_message.edit_text(
+                f"🔍 *{keyword}* için loglar taranıyor... \n"
+                f"⏳ Kalan süre: {minutes} dakika {seconds} saniye \n"
+                "🕰️ Birazdan sonuçları görüntüleyeceksiniz! 🌟"
+            )
+            await asyncio.sleep(5)  # Her 5 saniyede bir güncelle
 
-        msg = md_escape(
-            f"✅ Numara alındı: `{phone}`\n\n"
-            f"🔥 Kaç adet göndereyim? (max {MAX_COUNT})"
+        logs = await find_logs(keyword)
+
+        # Daha önce gösterilen logları filtrele
+        if chat_id in shown_logs:
+            logs = [log for log in logs if log not in shown_logs[chat_id]]
+        else:
+            shown_logs[chat_id] = []
+
+        if logs:
+            # Her log satırının başına ve dosyanın başına reklam metnini ekle
+            header = "📋 *Bytncpx Log Servisi* 🔐\n"
+            logs = [f"📍 {log}" for log in logs]
+
+            # Logları geçici bir dosyaya yaz
+            with tempfile.NamedTemporaryFile(delete=False, mode='w', encoding='utf-8') as temp_file:
+                temp_file.write(header + '\n'.join(logs))
+                temp_file_path = temp_file.name
+            
+            # Gösterilen logları kaydet
+            shown_logs[chat_id].extend(logs)
+
+            # Dosyayı Telegram'a gönder
+            await update.message.reply_document(
+                document=open(temp_file_path, 'rb'),
+                filename='logs.txt',
+                caption="🎉 *Log Dosyanız Hazır!* 📂\n*İncelemek için tıklayın.* 🔍"
+            )
+            
+            # Rastgele komik mesaj gönder
+            funny_message = random.choice(FUNNY_MESSAGES)
+            await update.message.reply_text(funny_message)
+        else:
+            # Log bulunamazsa rastgele teselli mesajı gönder
+            no_log_message = random.choice(NO_LOG_MESSAGES)
+            await update.message.reply_text(no_log_message, parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ *Hata Oluştu!* \n\n"
+            f"🛠️ İşlem sırasında bir sorun meydana geldi: \n"
+            f"*{str(e)}*\n"
+            "📞 Destek ekibimize bildirebilirsiniz. 🆘"
         )
-        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN_V2)
+    finally:
+        # İşlemin tamamlandığını belirten mesaj
+        await processing_message.edit_text(
+            "✅ *İşlem Tamamlandı!* \n"
+            "🎊 Log tarama başarıyla sonuçlandırıldı. 🌟"
+        )
 
-    elif state == "count":
-        try:
-            count = int(text)
-            if count < 1 or count > MAX_COUNT:
-                await update.message.reply_text(md_escape(f"1-{MAX_COUNT} arası sayı gir."), parse_mode=ParseMode.MARKDOWN_V2)
-                return
-        except ValueError:
-            await update.message.reply_text(md_escape("Sayı gir lütfen."), parse_mode=ParseMode.MARKDOWN_V2)
-            return
+# /add_premium komutunu işleyen işlev
+async def add_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) != 1:
+        await update.message.reply_text(
+            "❗ *Eksik Bilgi!* \n\n"
+            "🆔 Lütfen bir kullanıcı ID'si belirtin. \n"
+            "*Örnek:* `/add_premium 123456789`"
+        )
+        return
 
-        context.user_data["count"] = count
-        context.user_data["state"] = None
+    try:
+        user_id = int(context.args[0])
+        expiration_date = datetime.now() + timedelta(days=30)
+        premium_users[user_id] = expiration_date
+        # Kullanıcının arama haklarını sınırsız yap
+        user_search_limits[user_id] = float('inf')
+        await update.message.reply_text(
+            f"🏆 *Premium Kullanıcı Eklendi!* \n\n"
+            f"🆔 Kullanıcı {user_id} artık *premium* statüsünde. \n"
+            "🎉 Tüm özelliklerin keyfini çıkarın! 🌟"
+        )
+    except ValueError:
+        await update.message.reply_text(
+            "❌ *Geçersiz Kullanıcı ID'si!* \n\n"
+            "🔢 Lütfen geçerli bir sayısal ID girin. \n"
+            "📞 Sorun yaşamaya devam ederseniz destek alın. 🆘"
+        )
 
-        phone = context.user_data["phone"]
-        msg = md_escape(
-            f"🚀 Başlatılıyor...\n"
-            f"Numara → `{phone}`\n"
-            f"Adet   → `{count}`\n"
-            f
+def main():
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("log", log))
+    app.add_handler(CommandHandler("add_premium", add_premium))
+
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
