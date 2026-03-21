@@ -66,7 +66,7 @@ Bu botta kafa dağıtmak için şansın ile kumar oynayabilirsin.
   👑 /bakiyever <@kullanıcı> <miktar> - Adminler için bakiye ekleme.
   🤑 /zenginler - En zengin oyuncuları görün.
 
-👑 Developer - Coder: @
+👑 Developer - Coder: @darmadaginim
 """)
 
 @bot.message_handler(commands=["bakiye"])
