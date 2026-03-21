@@ -1,289 +1,260 @@
-import os
-import tempfile
-import json
+import telebot
+import sqlite3
 import random
 from datetime import datetime, timedelta
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-import asyncio
-import concurrent.futures
 
-# Bot token'ınızı buraya ekleyin
-TELEGRAM_BOT_TOKEN = 'Bot Tokenimizi Giriyoruz'
+bot = telebot.TeleBot("BOT TOKENİNİ BURAYA YAPIŞTIR")
+conn = sqlite3.connect("kumar.db", check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER, last_daily TIMESTAMP)")
+conn.commit()
 
-# Komik mesajlar listesi
-FUNNY_MESSAGES = [
-    "🕺 Logları bulduk, şimdi dans etme zamanı! Dans, dans! 💃",
-    "☕ Loglar hazır, kahve molası mı veriyoruz? Afiyet olsun! 🍵",
-    "🕵️‍♀️ Aradığın log mu? İşte tam karşında, gizli hiçbir şey kalmadı! 🔍",
-    "😎 Suçüstü yakalandın! Loglar ele geçirildi bile! 🚨",
-    "🏆 Log avcısı günün kahramanı! Bravo sana! 🌟",
-    "🌈 VIP Log Hizmeti: Senin için özel olarak hazırlandı! 💎",
-    "🕶️ Gizli loglar artık açığa çıktı. Sır kalmadı! 🔓",
-    "🎉 Log bulma operasyonu başarılı. Kutlama zamanı! 🎊",
-    "🕯️ Loglar senin için özenle depolandı. Dedektiflik mezunu gibisin! 🏅",
-    "🍽️ Log ziyafeti hazır! Afiyet olsun, log avcısı! 🍴"
-]
-
-# Log bulunamazsa kullanılacak teselli mesajları
-NO_LOG_MESSAGES = [
-    "🕵️‍♀️ *Şimdilik bulamadık ama merak etme!* \n"
-    "🌐 Devasa veritabanımız sürekli güncelleniyor. Birazdan her şey netleşecek! 🔄",
-    
-    "🔍 *Log avcısı boş durmuyor!* \n"
-    "💾 Güncel veritabanımız şu anda yeni veriler için taranıyor. Az sonra bulacağız! 🚀",
-    
-    "🌈 *Üzülme, her şey yolunda!* \n"
-    "🔐 Gizli arşivlerimiz sürekli genişliyor. Bugün olmazsa yarın mutlaka bulacağız! 📊",
-    
-    "🕰️ *Zamana bırak!* \n"
-    "🌍 Global log ağımız kesintisiz olarak veri topluyor. Şimdilik görünmez ama yakında her şey netleşecek! 🌐",
-    
-    "🤖 *Yapay zeka destekli log arama sistemimiz çalışıyor!* \n"
-    "🔬 Detaylı tarama ve sürekli güncelleme modundayız. Az kaldı! 💡",
-    
-    "🔒 *Gizli bilgi deposu hazırlanıyor!* \n"
-    "📡 Veritabanımız sürekli besleniyor, güncellemeler devam ediyor. Sabret! 🌟",
-    
-    "💡 *Henüz değil ama çok yakında!* \n"
-    "🌐 Dünya çapındaki log ağımız her saniye genişliyor. İnan ki bulacağız! 🕵️‍♀️",
-    
-    "🚦 *Şu an için yeşil ışık yanmadı ama...* \n"
-    "🔄 Dinamik veritabanımız sürekli güncelleme halinde. Umudunu kaybetme! 📈",
-    
-    "🌠 *Her bulunamayan log, yeni bir fırsattır!* \n"
-    "🔍 Geniş arşivlerimiz her geçen saniye büyüyor. Bekle ve gör! 🌐",
-    
-    "🛡️ *Gizlilik ve güncellik bizim işimiz!* \n"
-    "💽 Veritabanımız sürekli genişliyor, yeni bilgiler geliyor. Henüz değil ama çok yakında! 🚀"
-]
-
-# Premium kullanıcıların ID'leri ve abonelik bitiş tarihleri
-premium_users = {}  # {user_id: expiration_date}
-
-# Gösterilen logları takip etmek için bir sözlük
-shown_logs = {}
-
-# Kullanıcı sorgulama haklarını takip eden sözlük
-user_search_limits = {}  # {user_id: remaining_attempts}
-
-# Kullanıcılara verilen maksimum sorgulama hakkı
-MAX_SEARCH_ATTEMPTS = 3
-
-# Premium kullanıcıları kontrol eden işlev
-def check_premium_users():
-    current_time = datetime.now()
-    expired_users = [user_id for user_id, expiry in premium_users.items() if current_time > expiry]
-    for user_id in expired_users:
-        del premium_users[user_id]
-
-# Belirli bir anahtar kelimeye göre txt dosyalarını tarayan işlev
-async def find_logs(keyword):
-    logs = []
+def is_admin(chat_id, user_id):
     try:
-        loop = asyncio.get_event_loop()
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            tasks = [
-                loop.run_in_executor(executor, search_in_file, filename, keyword)
-                for filename in os.listdir('.')
-                if filename.endswith('.txt')
-            ]
-            results = await asyncio.gather(*tasks)
-            for result in results:
-                logs.extend(result)
-    except Exception as e:
-        print(f"find_logs sırasında hata: {str(e)}")
-    return logs
+        member = bot.get_chat_member(chat_id, user_id)
+        return member.status in ["administrator", "creator"]
+    except:
+        return False
 
-def search_in_file(filename, keyword):
-    logs = []
+def get_balance(user_id):
+    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+    result = cursor.fetchone()
+    if result:
+        return result[0]
+    else:
+        cursor.execute("INSERT INTO users (user_id, balance, last_daily) VALUES (?, ?, ?)", (user_id, 0, 0))
+        conn.commit()
+        return 0
+
+def update_balance(user_id, amount):
+    current_balance = get_balance(user_id)
+    new_balance = current_balance + amount
+    cursor.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, user_id))
+    conn.commit()
+    return new_balance
+
+def find_user(chat_id, target, reply_to_message=None):
+    if reply_to_message and reply_to_message.from_user:
+        return reply_to_message.from_user
+    target = target.lstrip("@").lower()
     try:
-        with open(filename, 'r', encoding='utf-8') as file:
-            for line in file:
-                if keyword in line:
-                    logs.append(line.strip())
-    except UnicodeDecodeError:
-        try:
-            with open(filename, 'r', encoding='latin-1') as file:
-                for line in file:
-                    if keyword in line:
-                        logs.append(line.strip())
-        except Exception as e:
-            print(f"{filename} dosyası okunurken hata oluştu: {str(e)}")
-            return []
+        members = bot.get_chat_administrators(chat_id) + bot.get_chat_members(chat_id)
+        for member in members:
+            user = member.user
+            if (user.username and user.username.lower() == target) or \
+               (user.first_name and user.first_name.lower() == target) or \
+               (f"@{user.username.lower()}" == target if user.username else False):
+                return user
+    except:
+        pass
+    return None
 
-    return logs
+@bot.message_handler(commands=["start"])
+def start(message):
+    user = message.from_user.username or message.from_user.first_name
+    bot.reply_to(message, f"""
+✨ Kumar botuna hoşgeldin, {user} ✨
 
-# /start komutunu işleyen işlev
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    check_premium_users()
-    user_id = update.message.from_user.id
-    
-    # Kullanıcının premium olup olmadığını kontrol et
-    if user_id not in premium_users:
-        # Kullanıcının daha önce başlatılıp başlatılmadığını kontrol edin
-        if user_id not in user_search_limits:
-            user_search_limits[user_id] = MAX_SEARCH_ATTEMPTS
+Bu botta kafa dağıtmak için şansın ile kumar oynayabilirsin.
+- Komutlar şunlardır:
+  🎰 /risk <miktar> veya /risk all - %50 şansla bahsinizi katlayın!
+  🎲 /zar <miktar> - Zar at, 5 veya 6 gelirse 2x kazan!
+  🎰 /slot <miktar> - Slot çek, üç aynı sembol 3x kazandırır!
+  🏛 /bakiye - Bakiyenizi görün.
+  💸 /gonder <@kullanıcı> <miktar> - Başkasına para gönderin.
+  🪙 /gunluk - Her 24 saatte 100.000TL alın.
+  👑 /bakiyever <@kullanıcı> <miktar> - Adminler için bakiye ekleme.
+  🤑 /zenginler - En zengin oyuncuları görün.
 
-        # Kullanıcının sorgulama haklarını kontrol edin
-        if user_search_limits[user_id] <= 0:
-            await update.message.reply_text(
-                "🚫 *Üzgünüz!* Sorgulama hakkınız tükendi. \n\n"
-                "💡 Yeni bir paket satın almak için @Bytncpx ile iletişime geçin. \n"
-                "📞 Destek hattımız her zaman sizin için hazır! 🌟"
-            )
-            return
-    
-    welcome_message = (
-        "🤖 *Log Tarama Botuna Hoş Geldiniz!* 🔍\n\n"
-        "📜 Ben, gizli logları bulma konusunda uzmanlaşmış bir botum.\n"
-        "✨ Belirli bir anahtar kelimeyi kullanarak log dosyalarını tarayabilirim.\n\n"
-        "🎯 *Nasıl Kullanılır?*\n"
-        "• Komut: `/log [anahtar kelime]`\n"
-        "• *Örnek:* `/log netflix`\n\n"
-        "🚀 Hemen aramaya başlayın ve logların sırlarını keşfedin! 🕵️‍♀️"
-    )
-    await update.message.reply_text(welcome_message, parse_mode='Markdown')
+👑 Developer - Coder: @
+""")
 
-# /log komutunu işleyen işlev
-async def log(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    check_premium_users()
-    user_id = update.message.from_user.id
-    
-    # Kullanıcının premium olup olmadığını kontrol edin
-    if user_id not in premium_users:
-        if user_id not in user_search_limits:
-            user_search_limits[user_id] = MAX_SEARCH_ATTEMPTS
-        
-        # Sorgulama hakkı kalmadıysa engelle
-        if user_search_limits[user_id] <= 0:
-            await update.message.reply_text(
-                "🚫 *Sorgulama Hakkı Tükendi!* 🔒\n\n"
-                "💡 Yeni bir paket satın almak için @Bytncpx ile iletişime geçin.\n"
-                "📞 Destek ekibimiz yardımcı olmaya hazır! 🌈"
-            )
-            return
+@bot.message_handler(commands=["bakiye"])
+def bakiye(message):
+    user_id = message.from_user.id
+    balance = get_balance(user_id)
+    bot.reply_to(message, f"🏛 Bakiyeniz: {balance}TL")
 
-        # Kullanıcının sorgulama hakkını azalt
-        user_search_limits[user_id] -= 1
-    
-    if len(context.args) != 1:
-        await update.message.reply_text(
-            "❗ *Eksik Parametre!* \n\n"
-            "🔍 Lütfen bir *anahtar kelime* belirtin. \n"
-            "📝 *Örnek:* `/log udemy`"
-        )
+@bot.message_handler(commands=["bakiyever"])
+def bakiyever(message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    if not is_admin(chat_id, user_id):
+        bot.reply_to(message, "❌ Sadece adminler bu komutu kullanabilir!")
         return
-
-    keyword = context.args[0]
-    chat_id = update.message.chat_id
-
-    # Kullanıcıya işlemin başladığını belirten mesaj
-    processing_message = await update.message.reply_text(
-        f"🔬 *{keyword}* için loglar taranıyor... \n"
-        "⏳ Lütfen sabırla bekleyin. Gizli bilgiler çıkarılıyor! 🕵️‍♀️"
-    )
-
     try:
-        # İşlem süresini belirlemek için zaman hesaplama
-        start_time = datetime.now()
-        end_time = start_time + timedelta(seconds=30)  # Örneğin, 30 saniye işlem süresi
-
-        while datetime.now() < end_time:
-            remaining_time = end_time - datetime.now()
-            minutes, seconds = divmod(remaining_time.seconds, 60)
-            await processing_message.edit_text(
-                f"🔍 *{keyword}* için loglar taranıyor... \n"
-                f"⏳ Kalan süre: {minutes} dakika {seconds} saniye \n"
-                "🕰️ Birazdan sonuçları görüntüleyeceksiniz! 🌟"
-            )
-            await asyncio.sleep(5)  # Her 5 saniyede bir güncelle
-
-        logs = await find_logs(keyword)
-
-        # Daha önce gösterilen logları filtrele
-        if chat_id in shown_logs:
-            logs = [log for log in logs if log not in shown_logs[chat_id]]
+        parts = message.text.split()
+        reply = message.reply_to_message
+        if len(parts) != 3 and not reply:
+            bot.reply_to(message, "⚠️ Kullanım: /bakiyever kullanıcı İD miktar veya bir mesajı yanıtlayın!")
+            return
+        if reply:
+            target_user = find_user(chat_id, "", reply)
+            amount = int(parts[1]) if len(parts) > 1 else None
         else:
-            shown_logs[chat_id] = []
-
-        if logs:
-            # Her log satırının başına ve dosyanın başına reklam metnini ekle
-            header = "📋 *Bytncpx Log Servisi* 🔐\n"
-            logs = [f"📍 {log}" for log in logs]
-
-            # Logları geçici bir dosyaya yaz
-            with tempfile.NamedTemporaryFile(delete=False, mode='w', encoding='utf-8') as temp_file:
-                temp_file.write(header + '\n'.join(logs))
-                temp_file_path = temp_file.name
-            
-            # Gösterilen logları kaydet
-            shown_logs[chat_id].extend(logs)
-
-            # Dosyayı Telegram'a gönder
-            await update.message.reply_document(
-                document=open(temp_file_path, 'rb'),
-                filename='logs.txt',
-                caption="🎉 *Log Dosyanız Hazır!* 📂\n*İncelemek için tıklayın.* 🔍"
-            )
-            
-            # Rastgele komik mesaj gönder
-            funny_message = random.choice(FUNNY_MESSAGES)
-            await update.message.reply_text(funny_message)
-        else:
-            # Log bulunamazsa rastgele teselli mesajı gönder
-            no_log_message = random.choice(NO_LOG_MESSAGES)
-            await update.message.reply_text(no_log_message, parse_mode='Markdown')
-    except Exception as e:
-        await update.message.reply_text(
-            f"❌ *Hata Oluştu!* \n\n"
-            f"🛠️ İşlem sırasında bir sorun meydana geldi: \n"
-            f"*{str(e)}*\n"
-            "📞 Destek ekibimize bildirebilirsiniz. 🆘"
-        )
-    finally:
-        # İşlemin tamamlandığını belirten mesaj
-        await processing_message.edit_text(
-            "✅ *İşlem Tamamlandı!* \n"
-            "🎊 Log tarama başarıyla sonuçlandırıldı. 🌟"
-        )
-
-# /add_premium komutunu işleyen işlev
-async def add_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1:
-        await update.message.reply_text(
-            "❗ *Eksik Bilgi!* \n\n"
-            "🆔 Lütfen bir kullanıcı ID'si belirtin. \n"
-            "*Örnek:* `/add_premium 123456789`"
-        )
-        return
-
-    try:
-        user_id = int(context.args[0])
-        expiration_date = datetime.now() + timedelta(days=30)
-        premium_users[user_id] = expiration_date
-        # Kullanıcının arama haklarını sınırsız yap
-        user_search_limits[user_id] = float('inf')
-        await update.message.reply_text(
-            f"🏆 *Premium Kullanıcı Eklendi!* \n\n"
-            f"🆔 Kullanıcı {user_id} artık *premium* statüsünde. \n"
-            "🎉 Tüm özelliklerin keyfini çıkarın! 🌟"
-        )
+            target_user = find_user(chat_id, parts[1])
+            amount = int(parts[2])
+        if not target_user:
+            bot.reply_to(message, "⚠️ Kullanıcı bulunamadı! kullanıcı ID veya kişinin mesajını yanıtlayın.")
+            return
+        if not amount or amount <= 0:
+            bot.reply_to(message, "⚠️ Geçerli bir miktar girin!")
+            return
+        new_balance = update_balance(target_user.id, amount)
+        bot.reply_to(message, f"✅ @{target_user.username or target_user.first_name} kişisine {amount}TL gönderildi.\nGüncel bakiyesi: {new_balance}TL")
     except ValueError:
-        await update.message.reply_text(
-            "❌ *Geçersiz Kullanıcı ID'si!* \n\n"
-            "🔢 Lütfen geçerli bir sayısal ID girin. \n"
-            "📞 Sorun yaşamaya devam ederseniz destek alın. 🆘"
-        )
+        bot.reply_to(message, "⚠️ Geçerli bir miktar girin!")
+    except:
+        bot.reply_to(message, "⚠️ Hata! Doğru formatta yazın veya bir mesajı yanıtlayın.")
 
-def main():
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+@bot.message_handler(commands=["risk"])
+def risk(message):
+    user_id = message.from_user.id
+    balance = get_balance(user_id)
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            bot.reply_to(message, "⚠️ Kullanım: /risk miktar veya /risk all")
+            return
+        amount = parts[1].lower()
+        if amount == "all":
+            amount = balance
+        else:
+            amount = int(amount)
+        if amount <= 0 or amount > balance:
+            bot.reply_to(message, "⚠️ Yeterli bakiyeniz yok veya geçersiz miktar!")
+            return
+        if random.random() < 0.5:
+            new_balance = update_balance(user_id, amount)
+            bot.reply_to(message, f"🎉 Tebrikler, {amount}TL kazandınız!\nGüncel bakiyeniz: {new_balance}TL")
+        else:
+            new_balance = update_balance(user_id, -amount)
+            bot.reply_to(message, f"😭 Üzgünüz, {amount}TL kaybettiniz.\nGüncel bakiyeniz: {new_balance}TL")
+    except ValueError:
+        bot.reply_to(message, "⚠️ Geçerli bir miktar girin: /risk miktar veya /risk all")
+    except:
+        bot.reply_to(message, "⚠️ Hata oluştu! Tekrar deneyin.")
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("log", log))
-    app.add_handler(CommandHandler("add_premium", add_premium))
+@bot.message_handler(commands=["zar"])
+def zar(message):
+    user_id = message.from_user.id
+    balance = get_balance(user_id)
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            bot.reply_to(message, "⚠️ Kullanım: /zar miktar")
+            return
+        amount = int(parts[1])
+        if amount <= 0 or amount > balance:
+            bot.reply_to(message, "⚠️ Yeterli bakiyeniz yok veya geçersiz miktar!")
+            return
+        roll = random.randint(1, 6)
+        if roll >= 5:
+            win = amount * 2
+            new_balance = update_balance(user_id, win)
+            bot.reply_to(message, f"🎲 Zar: {roll}! Tebrikler, {win}TL kazandınız!\nGüncel bakiyeniz: {new_balance}TL")
+        else:
+            new_balance = update_balance(user_id, -amount)
+            bot.reply_to(message, f"🎲 Zar: {roll}. Üzgünüz, {amount}TL kaybettiniz.\nGüncel bakiyeniz: {new_balance}TL")
+    except ValueError:
+        bot.reply_to(message, "⚠️ Geçerli bir miktar girin: /zar miktar")
+    except:
+        bot.reply_to(message, "⚠️ Hata oluştu! Tekrar deneyin.")
 
-    app.run_polling()
+@bot.message_handler(commands=["slot"])
+def slot(message):
+    user_id = message.from_user.id
+    balance = get_balance(user_id)
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            bot.reply_to(message, "⚠️ Kullanım: /slot miktar")
+            return
+        amount = int(parts[1])
+        if amount <= 0 or amount > balance:
+            bot.reply_to(message, "⚠️ Yeterli bakiyeniz yok veya geçersiz miktar!")
+            return
+        symbols = ["🍎", "🍊", "🍒", "💎"]
+        result = [random.choice(symbols) for _ in range(3)]
+        if result[0] == result[1] == result[2]:
+            win = amount * 3
+            new_balance = update_balance(user_id, win)
+            bot.reply_to(message, f"🎰 {result[0]} {result[1]} {result[2]} Jackpot! {win}TL kazandınız!\nGüncel bakiyeniz: {new_balance}TL")
+        else:
+            new_balance = update_balance(user_id, -amount)
+            bot.reply_to(message, f"🎰 {result[0]} {result[1]} {result[2]} Üzgünüz, {amount}TL kaybettiniz.\nGüncel bakiyeniz: {new_balance}TL")
+    except ValueError:
+        bot.reply_to(message, "⚠️ Geçerli bir miktar girin: /slot miktar")
+    except:
+        bot.reply_to(message, "⚠️ Hata oluştu! Tekrar deneyin.")
 
-if __name__ == '__main__':
-    main()
+@bot.message_handler(commands=["gonder"])
+def gonder(message):
+    user_id = message.from_user.id
+    balance = get_balance(user_id)
+    try:
+        parts = message.text.split()
+        reply = message.reply_to_message
+        if len(parts) != 3 and not reply:
+            bot.reply_to(message, "⚠️ Kullanım: /gonder @kullanıcı miktar veya bir mesajı yanıtlayın!")
+            return
+        if reply:
+            target_user = find_user(message.chat.id, "", reply)
+            amount = int(parts[1]) if len(parts) > 1 else None
+        else:
+            target_user = find_user(message.chat.id, parts[1])
+            amount = int(parts[2])
+        if not target_user:
+            bot.reply_to(message, "⚠️ Kullanıcı bulunamadı! @kullanıcı, kullanıcı adı veya görünen isim kullanın.")
+            return
+        if not amount or amount <= 0 or amount > balance:
+            bot.reply_to(message, "⚠️ Geçerli bir miktar girin veya bakiyeniz yetersiz!")
+            return
+        if target_user.id == user_id:
+            bot.reply_to(message, "❌ Kendinize para gönderemezsiniz!")
+            return
+        update_balance(user_id, -amount)
+        new_balance_target = update_balance(target_user.id, amount)
+        bot.reply_to(message, f"💸 @{target_user.username or target_user.first_name} kişisine {amount}TL gönderildi!\nOnun bakiyesi: {new_balance_target}TL\nSenin bakiyen: {get_balance(user_id)}TL")
+    except ValueError:
+        bot.reply_to(message, "⚠️ Geçerli bir miktar girin!")
+    except:
+        bot.reply_to(message, "⚠️ Hata! Doğru formatta yazın veya bir mesajı yanıtlayın.")
+
+@bot.message_handler(commands=["gunluk"])
+def gunluk(message):
+    user_id = message.from_user.id
+    cursor.execute("SELECT last_daily FROM users WHERE user_id = ?", (user_id,))
+    result = cursor.fetchone()
+    now = datetime.now()
+    if result and result[0]:
+        last_daily = datetime.fromtimestamp(result[0])
+        if now - last_daily < timedelta(hours=24):
+            remaining = (last_daily + timedelta(hours=24)) - now
+            hours, remainder = divmod(remaining.seconds, 3600)
+            minutes = remainder // 60
+            bot.reply_to(message, f"⏳ Günlük ödül için {hours}s {minutes}dk beklemelisin!")
+            return
+    new_balance = update_balance(user_id, 100000)
+    cursor.execute("UPDATE users SET last_daily = ? WHERE user_id = ?", (now.timestamp(), user_id))
+    conn.commit()
+    bot.reply_to(message, f"🪙 Günlük ödül alındı! 100.000TL eklendi.\nGüncel bakiyeniz: {new_balance}TL")
+
+@bot.message_handler(commands=["zenginler"])
+def zenginler(message):
+    cursor.execute("SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 5")
+    results = cursor.fetchall()
+    if not results:
+        bot.reply_to(message, "🤑 Henüz kimse bakiye kazanmamış!")
+        return
+    response = "🏆 En Zengin Oyuncular 🏆\n\n"
+    for i, (user_id, balance) in enumerate(results, 1):
+        try:
+            user = bot.get_chat_member(message.chat.id, user_id).user
+            username = user.username or user.first_name
+            response += f"{i}. 🥇 @{username}: {balance}TL\n" if i == 1 else f"{i}. 🥈 @{username}: {balance}TL\n" if i == 2 else f"{i}. 🥉 @{username}: {balance}TL\n" if i == 3 else f"{i}. 💰 @{username}: {balance}TL\n"
+        except:
+            continue
+    bot.reply_to(message, response)
+
+bot.polling()
