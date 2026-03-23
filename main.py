@@ -3,7 +3,7 @@ import sqlite3
 import random
 from datetime import datetime, timedelta
 
-bot = telebot.TeleBot("8763076860:AAE56LFK9K5FCxjRQEykNOPb0PqdYqCihyk")
+bot = telebot.TeleBot("8512730251:AAEjDTJS3LOEpFHEfyUUB0p42ZJKWywlqP4")
 conn = sqlite3.connect("kumar.db", check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER, last_daily TIMESTAMP)")
