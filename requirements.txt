@@ -1,1 +1,2 @@
-pyTelegramBotAPI==4.15.4
+aiogram==3.1.0b7
+aiosqlite==0.18.0
