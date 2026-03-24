@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 # --------- AYARLAR ---------
 TOKEN = os.getenv("BOT_TOKEN")  # Railway secret olarak ekle
-CREATOR_ID = 123456789          # Kurucu ID
+CREATOR_ID = 8446478484          # Kurucu ID
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
