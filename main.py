@@ -1,16 +1,17 @@
 import asyncio
 import aiosqlite
 import random
+import time
+import os
 from aiogram import Bot, Dispatcher, types
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 # --------- AYARLAR ---------
-TOKEN = "8609719947:AAGD1Iocb3sWGN1FDrX5_qeZGXnmrzLtQFY"  # Railway secrets
-ALLOWED_USERS = []   # Boş, çünkü herkes oynayabilir
-CREATOR_ID = 8446478484  # Kurucu ID (para verme yetkisi)
-
+TOKEN = os.getenv("BOT_TOKEN")  # Railway Secret olarak ekle
+CREATOR_ID = 8446478484          # Kurucu ID
 bot = Bot(token=TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher(storage=MemoryStorage())
 
 # --------- DATABASE SETUP ---------
 async def init_db():
@@ -62,16 +63,16 @@ async def update_user(user_id: int, money=None, hp=None, xp=None, level=None, la
             await db.execute("UPDATE users SET last_daily=? WHERE user_id=?", (last_daily, user_id))
         await db.commit()
 
-# --------- /start COMMAND ---------
+# --------- /start ---------
 @dp.message(commands=["start"])
 async def start(msg: types.Message):
     text = """
 ╔════════════════════╗
-   VOİD MAFYA OYUNU
+      💣 MAFIA EMPIRE 💣
 ╚════════════════════╝
 
 💰 Para kazan, çete kur
-⚔️ Rakiplerini yok et
+🔫 Rakiplerini yok et
 🏦 Büyük soygunlar yap
 
 📜 Komutlar:
@@ -114,7 +115,6 @@ async def cb_handler(cb: types.CallbackQuery):
 
 # --------- DAILY BONUS ---------
 async def handle_daily(msg, user):
-    import time
     now = int(time.time())
     if now - user["last_daily"] < 86400:  # 24 saat
         await msg.reply("❌ Günlük hakkını zaten kullandın!")
@@ -132,7 +132,7 @@ async def handle_soygun(msg, user):
         await msg.reply(f"🏦 Soygun başarılı! +{amount}₺")
     else:
         loss = random.randint(100, 500)
-        await update_user(user["user_id"], money=max(user["money"]-loss, 0))
+        await update_user(user["user_id"], money=max(user["money"]-loss,0))
         await msg.reply(f"🚔 Yakalandın! -{loss}₺")
 
 # --------- /profil ---------
@@ -155,14 +155,8 @@ async def verpara(msg: types.Message):
         return
     try:
         args = msg.text.split()
-        target = args[1]  # @username veya id
+        target_id = int(args[1])
         amount = int(args[2])
-        # id ile ver
-        if target.startswith("@"):
-            # username'den id almak için bot API gerekebilir, şimdilik id ile kullan
-            await msg.reply("❌ Lütfen kullanıcı ID ile verin.")
-            return
-        target_id = int(target)
         target_user = await get_user(target_id)
         await update_user(target_id, money=target_user["money"]+amount)
         await msg.reply(f"✅ {amount}₺ başarıyla verildi!")
