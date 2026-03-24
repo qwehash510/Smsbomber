@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 # --------- AYARLAR ---------
-TOKEN = "BOT_TOKEN"  # Railway secrets
+TOKEN = "8609719947:AAGD1Iocb3sWGN1FDrX5_qeZGXnmrzLtQFY"  # Railway secrets
 ALLOWED_USERS = []   # Boş, çünkü herkes oynayabilir
 CREATOR_ID = 8446478484  # Kurucu ID (para verme yetkisi)
 
