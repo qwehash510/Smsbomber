@@ -8,8 +8,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 # --------- AYARLAR ---------
-TOKEN = os.getenv("BOT_TOKEN")  # Railway Secret olarak ekle
-CREATOR_ID = 8446478484          # Kurucu ID
+TOKEN = os.getenv("BOT_TOKEN")  # Railway secret olarak ekle
+CREATOR_ID = 123456789          # Kurucu ID
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
@@ -103,6 +103,8 @@ async def cb_handler(cb: types.CallbackQuery):
     user_id = cb.from_user.id
     data = cb.data
     user = await get_user(user_id)
+
+    await cb.answer()  # Callback yanıtla
 
     if data == "profil":
         await cb.message.answer(f"💰 Para: {user['money']}\n❤️ Can: {user['hp']}\nXP: {user['xp']}\nLevel: {user['level']}")
